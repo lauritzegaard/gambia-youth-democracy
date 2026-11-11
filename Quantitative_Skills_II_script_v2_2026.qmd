@@ -1,0 +1,601 @@
+---
+title: "Democratic Political Engagement in Post-Transition Gambia"
+subtitle: "Replication script, Quantitative Methods II (Sciences Po), revised version"
+author: "Lauritz Elias GAARD"
+date: "2026-11-11"
+date-format: "D MMMM YYYY"
+format:
+  pdf:
+    include-in-header:
+      text: |
+        \usepackage{float}
+        \usepackage{fvextra}
+        \DefineVerbatimEnvironment{Highlighting}{Verbatim}{breaklines,commandchars=\\\{\}}
+    toc: true
+    number-sections: true
+    geometry: margin=2.5cm
+    fontsize: 11pt
+execute:
+  warning: false
+  message: false
+editor: visual
+---
+
+# Introduction
+
+This document contains the R code for the final paper "Democratic political engagement in post-transition Gambia". The analysis uses Afrobarometer Round 9 data for The Gambia (2022, N = 1,200) to examine whether young Gambians differ from older cohorts in their support for democracy and in their political participation. It estimates survey-weighted logistic regressions for three levels of support for democracy (value-based, structural and process-related) and two forms of unconventional political participation (attending a community meeting and joining others to raise an issue).
+
+# Data preparation
+
+## Packages and data
+
+```{r}
+library(tidyverse)
+library(dplyr)
+library(haven)
+library(survey)
+library(stargazer)
+library(ggeffects)
+library(patchwork)
+library(car)
+
+GAM_R9 <- read_sav("data/GAM_R9.data_2022.sav") %>%
+  select(Q1, Q22A, Q22B, Q22C, Q23, Q31, Q3, Q47A, Q30, Q89A, Q14A, Q10A, Q10B,
+         Q10C, Q11B, Q11C, Q11D, Q11E, Q13, Q94, Q100, URBRUR, Q4A, Q4B,
+         withinwt_ea)
+```
+
+## Missing values and youth variable
+
+Missing values ("Don't know", "Refused", "Missing") are recoded as NA. Education (Q94) is excluded from this step, since codes 7–9 are valid education categories in this variable. The youth dummy follows the African Union Youth Charter definition (35 and below) and is created after recoding missing ages.
+
+```{r}
+GAM_R9 <- GAM_R9 %>%
+  mutate(
+    across(c(Q22A, Q22B, Q22C, Q23, Q31, Q3, Q47A, Q30, Q89A, Q14A, Q10A, Q10B,
+             Q10C, Q11B, Q11C, Q11D, Q11E, Q13, Q100, URBRUR, Q4A, Q4B),
+           ~ case_when(.x %in% c(7, 8, 9, -1, 98, 99) ~ NA_integer_, TRUE ~ .x)),
+
+    Q1 = case_when(Q1 %in% c(998, 999, -1) ~ NA_integer_, TRUE ~ Q1),
+
+    youth = ifelse(Q1 <= 35, 1, 0))
+```
+
+## Dependent variables
+
+### Support for democracy
+
+The three levels of support for democracy follow Fuchs (2007): value-based (Q23), structural (Q31) and process-related (Q47A). All are recoded into binary indicators.
+
+```{r}
+GAM_R9 <- GAM_R9 %>%
+  mutate(
+    # Value-based: "1 = Doesn't matter" and "2 = Sometimes non-democratic
+    # preferable" to 0, and "3 = Democracy preferable" to 1.
+    Q23 = case_when(Q23 %in% c(1, 2) ~ 0,
+                    Q23 == 3 ~ 1,
+                    TRUE ~ NA_integer_),
+
+    # Structural: "0 = Not a democracy", "1 = Not at all satisfied" and
+    # "2 = Not very satisfied" to 0, and "3 = Fairly satisfied" and
+    # "4 = Very satisfied" to 1.
+    Q31 = case_when(Q31 %in% c(0, 1, 2) ~ 0,
+                    Q31 %in% c(3, 4) ~ 1,
+                    TRUE ~ NA_integer_),
+
+    # Process-related (approval of the president): "1 = Strongly disapprove"
+    # and "2 = Disapprove" to 0, and "3 = Approve" and "4 = Strongly approve" to 1.
+    Q47A = case_when(Q47A %in% c(1, 2) ~ 0,
+                     Q47A %in% c(3, 4) ~ 1,
+                     TRUE ~ NA_integer_))
+```
+
+### Support for authoritarian alternatives
+
+These items (one-party rule, military rule and one-man rule) are recoded for descriptive purposes. They are not modelled, as large majorities of respondents reject each alternative.
+
+```{r}
+GAM_R9 <- GAM_R9 %>%
+  mutate(
+    # "1 = Strongly disapprove" and "2 = Disapprove" to 0, "4 = Approve"
+    # and "5 = Strongly approve" to 1, and "3 = Neither" to NA.
+    Q22A = case_when(Q22A %in% c(1, 2) ~ 0,
+                     Q22A %in% c(4, 5) ~ 1,
+                     TRUE ~ NA_integer_),
+    Q22B = case_when(Q22B %in% c(1, 2) ~ 0,
+                     Q22B %in% c(4, 5) ~ 1,
+                     TRUE ~ NA_integer_),
+    Q22C = case_when(Q22C %in% c(1, 2) ~ 0,
+                     Q22C %in% c(4, 5) ~ 1,
+                     TRUE ~ NA_integer_))
+```
+
+### Political participation
+
+Only two unconventional participation items, attending a community meeting (Q10A) and joining others to raise an issue (Q10B), show enough variation to be modelled. Voting (Q13) is recoded but not modelled, as almost all respondents report having voted.
+
+```{r}
+GAM_R9 <- GAM_R9 %>%
+  mutate(
+    # "0 = No, would never" and "1 = No, but would if I had the chance" to 0,
+    # and "2 = Yes, once or twice", "3 = Yes, several times" and
+    # "4 = Yes, often" to 1.
+    Q10A = case_when(Q10A %in% c(0, 1) ~ 0,
+                     Q10A %in% c(2, 3, 4) ~ 1,
+                     TRUE ~ NA_integer_),
+    Q10B = case_when(Q10B %in% c(0, 1) ~ 0,
+                     Q10B %in% c(2, 3, 4) ~ 1,
+                     TRUE ~ NA_integer_),
+
+    # Voting: "1 = Too young to vote" and "2 = Can't remember" to NA,
+    # and "3 = Voted" to 1.
+    Q13 = case_when(Q13 == 3 ~ 1,
+                    TRUE ~ NA_integer_),
+
+    # Direction of the country: "1 = Wrong direction" to 0,
+    # and "2 = Right direction" to 1.
+    Q3 = case_when(Q3 == 1 ~ 0,
+                   Q3 == 2 ~ 1,
+                   TRUE ~ NA_integer_))
+```
+
+## Independent and control variables
+
+```{r}
+GAM_R9 <- GAM_R9 %>%
+  mutate(
+    # Gender: "1 = Male" to 0 and "2 = Female" to 1.
+    Q100 = case_when(Q100 == 1 ~ 0,
+                     Q100 == 2 ~ 1,
+                     TRUE ~ NA_integer_),
+
+    # Urban/rural: "1 = Urban" to 0 and "2 = Rural" to 1.
+    URBRUR = case_when(URBRUR == 1 ~ 0,
+                       URBRUR == 2 ~ 1,
+                       TRUE ~ NA_integer_),
+
+    # Education: four categories, with post-secondary and university
+    # grouped together.
+    Q94 = case_when(
+      Q94 %in% c(0, 1) ~ "no schooling",
+      Q94 %in% c(2, 3) ~ "primary education",
+      Q94 %in% c(4, 5, 6) ~ "secondary education",
+      Q94 %in% c(7, 8, 9, 10) ~ "post-secondary education",
+      TRUE ~ NA_character_))
+```
+
+## Variable types and names
+
+Economic and living conditions are kept as continuous variables (five-point scales), and the remaining variables are converted to factors. Education is ordered with "no schooling" as the reference category.
+
+```{r}
+GAM_R9 <- GAM_R9 %>%
+  mutate(across(c(Q4A, Q4B, Q1, withinwt_ea), as.numeric),
+         across(-c(Q4A, Q4B, Q1, withinwt_ea, youth), as.factor),
+         Q94 = fct_relevel(Q94, "no schooling", "primary education",
+                           "secondary education", "post-secondary education")) %>%
+  rename(
+    # Support for authoritarian alternatives
+    opr    = Q22A,
+    mr     = Q22B,
+    omr    = Q22C,
+    # Three levels of support for democracy
+    gt     = Q23,
+    sat    = Q31,
+    ppres  = Q47A,
+    # Political attitudes
+    demx   = Q30,
+    dir    = Q3,
+    elect_fair = Q14A,
+    # Unconventional participation
+    cmeet  = Q10A,
+    jiss   = Q10B,
+    demo   = Q10C,
+    ccoun  = Q11B,
+    cmp    = Q11C,
+    cparty = Q11D,
+    ctrad  = Q11E,
+    # Conventional participation
+    voted  = Q13,
+    # Control variables
+    age    = Q1,
+    edu    = Q94,
+    sex    = Q100,
+    urb    = URBRUR,
+    econ   = Q4A,
+    life   = Q4B,
+    paff   = Q89A
+  )
+```
+
+```{r, results='hide'}
+glimpse(GAM_R9)
+```
+
+## Data checks
+
+Number of respondents in each education category:
+
+```{r}
+knitr::kable(table(GAM_R9$edu, useNA = "ifany"),
+             col.names = c("Education level", "N"))
+```
+
+## Survey design
+
+All models use Afrobarometer's within-country weights (`withinwt_ea`) through a survey design object, so that estimates are nationally representative and standard errors are design-based.
+
+```{r}
+design <- svydesign(ids = ~1, weights = ~withinwt_ea, data = GAM_R9)
+```
+
+# Support for democracy
+
+## Logistic regression models
+
+The first set of models tests whether youth status predicts each of the three levels of support for democracy, controlling for education, gender, urban/rural residence, economic and living conditions, and political party affiliation. Coefficients are reported as log-odds.
+
+```{r}
+logit_mod_gt <- svyglm(gt ~ youth + edu + sex + urb + econ + life + paff,
+                       design = design,
+                       family = quasibinomial)
+
+logit_mod_sat <- svyglm(sat ~ youth + edu + sex + urb + econ + life + paff,
+                        design = design,
+                        family = quasibinomial)
+
+logit_mod_ppres <- svyglm(ppres ~ youth + edu + sex + urb + econ + life + paff,
+                          design = design,
+                          family = quasibinomial)
+```
+
+```{r, results='asis'}
+stargazer(logit_mod_gt, logit_mod_sat, logit_mod_ppres,
+          type = "latex",
+          header = FALSE,
+          table.placement = "H",
+          font.size = "small",
+          title = "Survey-weighted logistic regressions: support for democracy (log-odds)",
+          covariate.labels = c("Constant",
+                               "Youth (18-35)",
+                               "Primary education",
+                               "Secondary education",
+                               "Post-secondary education",
+                               "Sex (Female)",
+                               "Rural",
+                               "Economic condition",
+                               "Living condition",
+                               "Party affiliation"),
+          dep.var.labels = c("Value-based",
+                             "Structural",
+                             "Process-related"),
+          no.space = TRUE,
+          model.names = FALSE,
+          digits = 3,
+          intercept.bottom = FALSE,
+          star.cutoffs = c(0.1, 0.05, 0.01),
+          notes = "Reference category for education: no schooling.")
+```
+
+## Odds ratios
+
+Odds ratios are calculated by exponentiating the coefficients. Standard errors are transformed with the delta method, and significance stars are based on the p-values of the original models.
+
+```{r}
+# Helper function for standard errors
+se.coef <- function(model) sqrt(diag(vcov(model)))
+
+# Odds ratios
+OR_gt     <- exp(coef(logit_mod_gt))
+OR_sat    <- exp(coef(logit_mod_sat))
+OR_ppres  <- exp(coef(logit_mod_ppres))
+
+# Standard errors of the odds ratios (delta method)
+SE_gt     <- OR_gt * se.coef(logit_mod_gt)
+SE_sat    <- OR_sat * se.coef(logit_mod_sat)
+SE_ppres  <- OR_ppres * se.coef(logit_mod_ppres)
+
+# P-values from the original models
+P_gt      <- summary(logit_mod_gt)$coefficients[, 4]
+P_sat     <- summary(logit_mod_sat)$coefficients[, 4]
+P_ppres   <- summary(logit_mod_ppres)$coefficients[, 4]
+```
+
+```{r, results='asis'}
+stargazer(logit_mod_gt, logit_mod_sat, logit_mod_ppres,
+          coef = list(OR_gt, OR_sat, OR_ppres),
+          se = list(SE_gt, SE_sat, SE_ppres),
+          p = list(P_gt, P_sat, P_ppres),
+          t.auto = FALSE,
+          p.auto = FALSE,
+          type = "latex",
+          header = FALSE,
+          table.placement = "H",
+          font.size = "small",
+          title = "Survey-weighted logistic regressions: support for democracy (odds ratios)",
+          covariate.labels = c("Constant",
+                               "Youth (18-35)",
+                               "Primary education",
+                               "Secondary education",
+                               "Post-secondary education",
+                               "Sex (Female)",
+                               "Rural",
+                               "Economic condition",
+                               "Living condition",
+                               "Party affiliation"),
+          dep.var.labels = c("Value-based",
+                             "Structural",
+                             "Process-related"),
+          no.space = TRUE,
+          model.names = FALSE,
+          digits = 3,
+          intercept.bottom = FALSE,
+          star.cutoffs = c(0.1, 0.05, 0.01),
+          notes = "Reference category for education: no schooling.")
+```
+
+## Predicted probabilities
+
+### By youth status
+
+```{r, fig.width=8, fig.height=4}
+# Predicted probabilities for youth status (0 and 1)
+pred_gt <- as.data.frame(ggpredict(logit_mod_gt, terms = "youth [0,1]")) %>%
+  mutate(model = "Value-based Support")
+
+pred_sat <- as.data.frame(ggpredict(logit_mod_sat, terms = "youth [0,1]")) %>%
+  mutate(model = "Structural Support")
+
+pred_ppres <- as.data.frame(ggpredict(logit_mod_ppres, terms = "youth [0,1]")) %>%
+  mutate(model = "Process-related Support")
+
+# Combine all predictions and remove empty rows
+all_preds <- rbind(pred_gt, pred_sat, pred_ppres) %>%
+  na.omit()
+
+# Labels for plotting
+all_preds$x <- factor(all_preds$x, levels = c(0, 1), labels = c("Non-Youth", "Youth"))
+all_preds$model <- factor(all_preds$model,
+                          levels = c("Value-based Support", "Structural Support",
+                                     "Process-related Support"))
+
+# Plot
+ggplot(all_preds, aes(x = x, y = predicted)) +
+  geom_point(size = 3) +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.1) +
+  facet_wrap(~ model) +
+  labs(
+    title = "Predicted Probability of Support for Democracy by Youth Status",
+    x = "Youth Status",
+    y = "Predicted Probability"
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5))
+```
+
+### By youth status and education
+
+```{r, fig.width=9, fig.height=4.5}
+# Predicted probabilities for youth x education
+pred_gt <- as.data.frame(ggpredict(logit_mod_gt, terms = c("youth [0,1]", "edu"))) %>%
+  mutate(model = "Value-based Support")
+
+pred_sat <- as.data.frame(ggpredict(logit_mod_sat, terms = c("youth [0,1]", "edu"))) %>%
+  mutate(model = "Structural Support")
+
+pred_ppres <- as.data.frame(ggpredict(logit_mod_ppres, terms = c("youth [0,1]", "edu"))) %>%
+  mutate(model = "Process-related Support")
+
+# Combine predictions and remove empty rows
+all_preds <- rbind(pred_gt, pred_sat, pred_ppres) %>%
+  na.omit()
+
+# Labels for plotting
+all_preds$x <- factor(all_preds$x, levels = c(0, 1), labels = c("Non-Youth", "Youth"))
+all_preds$group <- factor(all_preds$group,
+                          levels = c("no schooling", "primary education",
+                                     "secondary education", "post-secondary education"),
+                          labels = c("No schooling", "Primary", "Secondary",
+                                     "Post-secondary"))
+all_preds$model <- factor(all_preds$model,
+                          levels = c("Value-based Support", "Structural Support",
+                                     "Process-related Support"))
+
+# Plot
+ggplot(all_preds, aes(x = x, y = predicted, color = group, group = group)) +
+  geom_point(position = position_dodge(0.4), size = 2.5) +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high),
+                position = position_dodge(0.4), width = 0.1) +
+  facet_wrap(~ model) +
+  labs(
+    title = "Predicted Probability of Support for Democracy by Youth and Education",
+    x = "Youth Status",
+    y = "Predicted Probability",
+    color = "Education"
+  ) +
+  theme_minimal(base_size = 10) +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5),
+        legend.position = "bottom")
+```
+
+## Diagnostics
+
+### Model fit
+
+Pseudo-R² is not well defined for survey-weighted models, so model fit is assessed through the share of correctly predicted cases (threshold 0.5).
+
+```{r}
+# Share of correctly predicted cases for each model
+acc_gt    <- mean((fitted(logit_mod_gt) >= 0.5) == logit_mod_gt$y)
+acc_sat   <- mean((fitted(logit_mod_sat) >= 0.5) == logit_mod_sat$y)
+acc_ppres <- mean((fitted(logit_mod_ppres) >= 0.5) == logit_mod_ppres$y)
+
+knitr::kable(data.frame(
+  Model = c("Value-based support", "Structural support", "Process-related support"),
+  `Correctly predicted (%)` = round(100 * c(acc_gt, acc_sat, acc_ppres), 1),
+  check.names = FALSE))
+```
+
+Confusion matrices:
+
+```{r}
+table(Predicted = as.numeric(fitted(logit_mod_gt) >= 0.5),
+      Actual = logit_mod_gt$y)
+table(Predicted = as.numeric(fitted(logit_mod_sat) >= 0.5),
+      Actual = logit_mod_sat$y)
+table(Predicted = as.numeric(fitted(logit_mod_ppres) >= 0.5),
+      Actual = logit_mod_ppres$y)
+```
+
+### Multicollinearity
+
+Generalized variance inflation factors (GVIF) for the value-based support model. The predictors are identical across the three models, so the values are very similar for the other two.
+
+```{r}
+knitr::kable(vif(logit_mod_gt), digits = 2)
+```
+
+# Unconventional participation
+
+## Logistic regression models
+
+The second set of models tests whether youth status predicts attending a community meeting and joining others to raise an issue, using the same controls.
+
+```{r}
+logit_mod_cmeet <- svyglm(cmeet ~ youth + edu + sex + urb + econ + life + paff,
+                          design = design,
+                          family = quasibinomial)
+
+logit_mod_jiss <- svyglm(jiss ~ youth + edu + sex + urb + econ + life + paff,
+                         design = design,
+                         family = quasibinomial)
+```
+
+```{r, results='asis'}
+stargazer(logit_mod_cmeet, logit_mod_jiss,
+          type = "latex",
+          header = FALSE,
+          table.placement = "H",
+          font.size = "small",
+          title = "Survey-weighted logistic regressions: unconventional participation (log-odds)",
+          covariate.labels = c("Constant",
+                               "Youth (18-35)",
+                               "Primary education",
+                               "Secondary education",
+                               "Post-secondary education",
+                               "Sex (Female)",
+                               "Rural",
+                               "Economic condition",
+                               "Living condition",
+                               "Party affiliation"),
+          dep.var.labels = c("Attended community meeting",
+                             "Joined others to raise an issue"),
+          no.space = TRUE,
+          model.names = FALSE,
+          digits = 3,
+          intercept.bottom = FALSE,
+          star.cutoffs = c(0.1, 0.05, 0.01),
+          notes = "Reference category for education: no schooling.")
+```
+
+## Odds ratios
+
+```{r}
+# Odds ratios, standard errors and p-values
+OR_cmeet <- exp(coef(logit_mod_cmeet))
+OR_jiss  <- exp(coef(logit_mod_jiss))
+
+SE_cmeet <- OR_cmeet * se.coef(logit_mod_cmeet)
+SE_jiss  <- OR_jiss  * se.coef(logit_mod_jiss)
+
+P_cmeet  <- summary(logit_mod_cmeet)$coefficients[, 4]
+P_jiss   <- summary(logit_mod_jiss)$coefficients[, 4]
+```
+
+```{r, results='asis'}
+stargazer(logit_mod_cmeet, logit_mod_jiss,
+          coef = list(OR_cmeet, OR_jiss),
+          se = list(SE_cmeet, SE_jiss),
+          p = list(P_cmeet, P_jiss),
+          t.auto = FALSE,
+          p.auto = FALSE,
+          type = "latex",
+          header = FALSE,
+          table.placement = "H",
+          font.size = "small",
+          title = "Survey-weighted logistic regressions: unconventional participation (odds ratios)",
+          covariate.labels = c("Constant",
+                               "Youth (18-35)",
+                               "Primary education",
+                               "Secondary education",
+                               "Post-secondary education",
+                               "Sex (Female)",
+                               "Rural",
+                               "Economic condition",
+                               "Living condition",
+                               "Party affiliation"),
+          dep.var.labels = c("Attended community meeting",
+                             "Joined others to raise an issue"),
+          no.space = TRUE,
+          model.names = FALSE,
+          digits = 3,
+          intercept.bottom = FALSE,
+          star.cutoffs = c(0.1, 0.05, 0.01),
+          notes = "Reference category for education: no schooling.")
+```
+
+## Predicted probabilities by gender and residence
+
+```{r, fig.width=9, fig.height=4}
+# Predicted probabilities for sex x urban/rural
+pred_cmeet <- as.data.frame(ggpredict(logit_mod_cmeet, terms = c("sex [0,1]", "urb [0,1]")))
+pred_jiss  <- as.data.frame(ggpredict(logit_mod_jiss,  terms = c("sex [0,1]", "urb [0,1]")))
+
+# Labels for plotting
+pred_cmeet$x     <- factor(pred_cmeet$x, levels = c(0, 1), labels = c("Male", "Female"))
+pred_cmeet$group <- factor(pred_cmeet$group, levels = c("0", "1"), labels = c("Urban", "Rural"))
+pred_jiss$x      <- factor(pred_jiss$x, levels = c(0, 1), labels = c("Male", "Female"))
+pred_jiss$group  <- factor(pred_jiss$group, levels = c("0", "1"), labels = c("Urban", "Rural"))
+
+# Plots
+plot_cmeet <- ggplot(pred_cmeet, aes(x = x, y = predicted, color = group, group = group)) +
+  geom_point(size = 3, position = position_dodge(0.3)) +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.1,
+                position = position_dodge(0.3)) +
+  labs(title = "Attending a Community Meeting",
+       x = "Sex", y = "Predicted Probability", color = "Residence") +
+  ylim(0, 1) +
+  theme_minimal(base_size = 11)
+
+plot_jiss <- ggplot(pred_jiss, aes(x = x, y = predicted, color = group, group = group)) +
+  geom_point(size = 3, position = position_dodge(0.3)) +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.1,
+                position = position_dodge(0.3)) +
+  labs(title = "Joining Others to Raise an Issue",
+       x = "Sex", y = "Predicted Probability", color = "Residence") +
+  ylim(0, 1) +
+  theme_minimal(base_size = 11)
+
+# Combine side by side
+plot_cmeet + plot_jiss + plot_layout(guides = "collect")
+```
+
+## Diagnostics
+
+### Model fit
+
+```{r}
+acc_cmeet <- mean((fitted(logit_mod_cmeet) >= 0.5) == logit_mod_cmeet$y)
+acc_jiss  <- mean((fitted(logit_mod_jiss) >= 0.5) == logit_mod_jiss$y)
+
+knitr::kable(data.frame(
+  Model = c("Attended community meeting", "Joined others to raise an issue"),
+  `Correctly predicted (%)` = round(100 * c(acc_cmeet, acc_jiss), 1),
+  check.names = FALSE))
+```
+
+### Multicollinearity
+
+```{r}
+knitr::kable(vif(logit_mod_cmeet), digits = 2)
+```
