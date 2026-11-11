@@ -15,7 +15,9 @@ The analysis uses Afrobarometer Round 9 data for The Gambia (2022, N = 1,200) to
 
 ## Data
 
-The data are not included in this repository. Download the Gambia Round 9 dataset (`GAM_R9.data_2022.sav`) from the Afrobarometer website (https://www.afrobarometer.org/data/) and place it in a folder named `data/` inside the project.
+The data are not included in this repository, as Afrobarometer data are protected by copyright. To run the script, download the Gambia Round 9 dataset (`GAM_R9.data_2022.sav`) free of charge from https://www.afrobarometer.org/data/ and place it in a folder named `data/` inside the project.
+
+Data source: Afrobarometer Data, The Gambia, Round 9, 2022, available at [http://www.afrobarometer.org.](https://www.afrobarometer.org/survey-resource/gambia-round-9-data-2023/)
 
 ## Requirements
 
